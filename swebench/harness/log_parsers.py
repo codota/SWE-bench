@@ -1,6 +1,6 @@
 import re
 from enum import Enum
-from swebench.harness.constants import TestStatus
+from swe_bench.swebench.harness.constants import TestStatus
 
 
 def parse_log_pytest(log: str) -> dict[str, str]:

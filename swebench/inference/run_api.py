@@ -21,7 +21,7 @@ from tenacity import (
     wait_random_exponential,
 )
 from datasets import load_dataset, load_from_disk
-from swebench.inference.make_datasets.utils import extract_diff
+from swe_bench.swebench.inference.make_datasets.utils import extract_diff
 from argparse import ArgumentParser
 import logging
 
@@ -42,6 +42,8 @@ MODEL_LIMITS = {
     "gpt-4-0613": 8_192,
     "gpt-4-1106-preview": 128_000,
     "gpt-4-0125-preview": 128_000,
+    "gpt-4o-mini": 32_000,
+    "gpt-4o": 32_000,
 }
 
 # The cost per token for each model input.
@@ -61,6 +63,8 @@ MODEL_COST_PER_INPUT = {
     "gpt-4-32k": 0.00006,
     "gpt-4-1106-preview": 0.00001,
     "gpt-4-0125-preview": 0.00001,
+    "gpt-4o-mini-2024-07-18": 0.00000015,
+    "gpt-4o-2024-08-06": 0.0000025,
 }
 
 # The cost per token for each model output.
@@ -80,6 +84,8 @@ MODEL_COST_PER_OUTPUT = {
     "gpt-4-32k": 0.00012,
     "gpt-4-1106-preview": 0.00003,
     "gpt-4-0125-preview": 0.00003,
+    "gpt-4o-mini-2024-07-18": 0.0000006,
+    "gpt-4o-2024-08-06": 0.00001,
 }
 
 # used for azure
@@ -513,7 +519,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset_name_or_path",
         type=str,
-        required=True,
+        default="/home/uri/Workspace/tabnine-evaluation-harness/retreival_results/SWE-bench__style-3__fs-tabnine_retrieval__k-10__mcc-8000-cl100k",
         help="HuggingFace dataset name or local path",
     )
     parser.add_argument(
@@ -525,6 +531,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_name_or_path",
         type=str,
+        default="gpt-4o",
         help="Name of API model. Update MODEL* constants in this file to add new models.",
         choices=sorted(list(MODEL_LIMITS.keys())),
     )
@@ -543,8 +550,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output_dir",
         type=str,
-        default=None,
-        required=True,
+        default="/home/uri/Workspace/tabnine-evaluation-harness/retreival_results/test",
         help="Path to the output file.",
     )
     parser.add_argument(

@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
 from tqdm import tqdm
 
-from swebench.harness.constants import (
+from swe_bench.swebench.harness.constants import (
     APPLY_PATCH_FAIL,
     APPLY_PATCH_PASS,
     DOCKER_PATCH,
@@ -29,7 +29,7 @@ from swebench.harness.constants import (
     RUN_EVALUATION_LOG_DIR,
     UTF8,
 )
-from swebench.harness.docker_utils import (
+from swe_bench.swebench.harness.docker_utils import (
     remove_image,
     copy_to_container,
     exec_run_with_timeout,
@@ -38,16 +38,16 @@ from swebench.harness.docker_utils import (
     should_remove,
     clean_images,
 )
-from swebench.harness.docker_build import (
+from swe_bench.swebench.harness.docker_build import (
     BuildImageError,
     build_container,
     build_env_images,
     close_logger,
     setup_logger,
 )
-from swebench.harness.grading import get_eval_report
-from swebench.harness.test_spec import make_test_spec, TestSpec
-from swebench.harness.utils import load_swebench_dataset, str2bool
+from swe_bench.swebench.harness.grading import get_eval_report
+from swe_bench.swebench.harness.test_spec import make_test_spec, TestSpec
+from swe_bench.swebench.harness.utils import load_swebench_dataset, str2bool
 
 
 class EvaluationError(Exception):
@@ -128,7 +128,7 @@ def run_instance(
 
         # Attempt to apply patch to container
         val = container.exec_run(
-            f"git apply --allow-empty -v {DOCKER_PATCH}",
+            f"git apply -v {DOCKER_PATCH}",
             workdir=DOCKER_WORKDIR,
             user=DOCKER_USER,
         )
@@ -322,6 +322,19 @@ def get_dataset_from_preds(
         missing_preds = set(instance_ids) - set(predictions.keys())
         if missing_preds:
             print(f"Warning: Missing predictions for {len(missing_preds)} instance IDs.")
+        
+        # filter dataset to only instances with provided IDs
+        dataset = [i for i in dataset if i[KEY_INSTANCE_ID] in instance_ids]
+        dataset_ids = {i[KEY_INSTANCE_ID] for i in dataset}
+
+    # check that all instance IDs are in the dataset
+    if instance_ids and set(instance_ids) - dataset_ids:
+        raise ValueError(
+            (
+                "Some instance IDs not found in dataset!"
+                f"\nMissing IDs:\n{' '.join(set(instance_ids) - dataset_ids)}"
+            )
+        )
     
     # check that all prediction IDs are in the dataset
     prediction_ids = set(predictions.keys())
@@ -332,8 +345,6 @@ def get_dataset_from_preds(
                 f"\nMissing IDs:\n{' '.join(prediction_ids - dataset_ids)}"
             )
         )
-    if instance_ids:
-        dataset = [i for i in dataset if i[KEY_INSTANCE_ID] in instance_ids]
 
     # check which instance IDs have already been run
     completed_ids = set()
@@ -473,7 +484,7 @@ def make_run_report(
     }
     report_file = Path(
         list(predictions.values())[0][KEY_MODEL].replace("/", "__")
-        + f".{run_id}"
+        + f"_{run_id}"
         + ".json"
     )
     with open(report_file, "w") as f:
@@ -552,11 +563,11 @@ def main(
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--dataset_name", default="princeton-nlp/SWE-bench_Lite", type=str, help="Name of dataset or path to JSON file.")
+    parser.add_argument("--dataset_name", default="princeton-nlp/SWE-bench", type=str, help="Name of dataset or path to JSON file.")
     parser.add_argument("--split", type=str, default="test", help="Split of the dataset")
-    parser.add_argument("--instance_ids", nargs="+", type=str, help="Instance IDs to run (space separated)")
-    parser.add_argument("--predictions_path", type=str, help="Path to predictions file - if 'gold', uses gold predictions", required=True)
-    parser.add_argument("--max_workers", type=int, default=4, help="Maximum number of workers (should be <= 75%% of CPU cores)")
+    parser.add_argument("--instance_ids", default=["astropy__astropy-11693"], nargs="+", type=str, help="Instance IDs to run (space separated)")
+    parser.add_argument("--predictions_path", type=str, default="/home/uri/Workspace/tabnine-evaluation-harness/retreival_results/test/gpt-4o__SWE-bench__style-3__fs-tabnine_retrieval__k-10__mcc-8000-cl100k__test.jsonl", help="Path to predictions file - if 'gold', uses gold predictions")
+    parser.add_argument("--max_workers", type=int, default=8, help="Maximum number of workers (should be <= 75%% of CPU cores)")
     parser.add_argument("--open_file_limit", type=int, default=4096, help="Open file limit")
     parser.add_argument(
         "--timeout", type=int, default=1_800, help="Timeout (in seconds) for running tests for each instance"
@@ -576,7 +587,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--clean", type=str2bool, default=False, help="Clean images above cache level"
     )
-    parser.add_argument("--run_id", type=str, required=True, help="Run ID - identifies the run")
+    parser.add_argument("--run_id", type=str, default="test", help="Run ID - identifies the run")
     args = parser.parse_args()
 
     main(**vars(args))

@@ -12,9 +12,9 @@ from pathlib import Path
 from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
 from tqdm.auto import tqdm
 
-from swebench.inference.make_datasets.create_instance import add_text_inputs, PROMPT_FUNCTIONS
-from swebench.inference.make_datasets.tokenize_dataset import TOKENIZER_FUNCS
-from swebench.inference.make_datasets.utils import string_to_bool
+from swe_bench.swebench.inference.make_datasets.create_instance import add_text_inputs, PROMPT_FUNCTIONS
+from swe_bench.swebench.inference.make_datasets.tokenize_dataset import TOKENIZER_FUNCS
+from swe_bench.swebench.inference.make_datasets.utils import string_to_bool
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -78,6 +78,7 @@ def main(
     max_context_len,
     tokenizer_name,
     push_to_hub_user,
+    use_first_sample_only
 ):
     if push_to_hub_user is not None:
         hub_token = os.environ.get("HUGGING_FACE_HUB_TOKEN", None)
@@ -119,7 +120,11 @@ def main(
     if set(splits) - set(dataset.keys()) != set():
         raise ValueError(f"Unknown splits {set(splits) - set(dataset.keys())}")
     for split in splits:
-        split_instances[split] = {x["instance_id"]: x for x in dataset[split]}
+        if use_first_sample_only:
+            x = dataset[split][0]
+            split_instances[split] = {x["instance_id"]: x}
+        else:
+            split_instances[split] = {x["instance_id"]: x for x in dataset[split]} 
         add_text_inputs(
             split_instances[split],
             retrieval_file,
@@ -155,6 +160,8 @@ def main(
                 continue
             for key in columns:
                 split_data[split][key].append(datum[key] if key in datum else "")
+            if use_first_sample_only:
+                break
         logger.info(f"Found {len(split_data[split]['instance_id'])} {split} ids")
         split_data[split] = Dataset.from_dict(split_data[split])
     dataset = DatasetDict(split_data)
@@ -185,7 +192,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--splits",
         nargs="+",
-        default=["train", "test"],
+        default=["test"],
         help="Splits to use from the dataset.",
     )
     parser.add_argument(
@@ -195,11 +202,15 @@ if __name__ == "__main__":
         help="Ratio of the training set to use for validation.",
     )
     parser.add_argument(
-        "--output_dir", type=str, help="Path to the output directory."
+        "--output_dir", 
+        type=str, 
+        help="Path to the output directory.",
+        default="./retreival_results"
     )
     parser.add_argument(
         "--retrieval_file",
         type=str,
+        default = "retreival_results/princeton-nlp__SWE-bench/file_name_and_contents.retrieval.jsonl",
         help="Path to the file where the retrieval results are stored.",
     )
     parser.add_argument(
@@ -212,26 +223,26 @@ if __name__ == "__main__":
     parser.add_argument(
         "--file_source",
         type=str,
-        default="oracle",
-        choices=["oracle", "bm25", "all"],
+        default="tabnine_retrieval",
+        choices=["oracle", "bm25", "all", "tabnine_retrieval"],
         help="How to select the files to use in context.",
     )
     parser.add_argument(
         "--k",
         type=int,
-        default=None,
+        default=10,
         help="Maximum number of files to use for retrieval.",
     )
     parser.add_argument(
         "--max_context_len",
         type=int,
-        default=None,
+        default=8000,
         help="Maximum number of tokens to use for context.",
     )
     parser.add_argument(
         "--tokenizer_name",
         type=str,
-        default=None,
+        default="cl100k",
         choices=TOKENIZER_FUNCS.keys(),
         help="Tokenizer to use for max_context_len. Only needed if max_context_len is specified.",
     )
@@ -239,5 +250,11 @@ if __name__ == "__main__":
         "--push_to_hub_user",
         type=str,
         help="Username to use for pushing to the Hub. If not provided, will save to disk.",
+    )
+    parser.add_argument(
+        "--use_first_sample_only",
+        default=True,
+        action="store_true",
+        help="Whether to use only the first sample for each instance.",
     )
     main(**vars(parser.parse_args()))

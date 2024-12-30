@@ -8,13 +8,13 @@ import subprocess
 from filelock import FileLock
 from typing import Any
 from datasets import load_from_disk, load_dataset
-from pyserini.search.lucene import LuceneSearcher
+from retrieval_pipeline_eval.index import Index
+from retrieval_pipeline_eval.embed import DenseCodeEmbedder, SparseCodeEmbedder
 from git import Repo
 from pathlib import Path
 from tqdm.auto import tqdm
 from argparse import ArgumentParser
-
-from swebench.inference.make_datasets.utils import list_files, string_to_bool
+from swe_bench.swebench.inference.make_datasets.utils import list_files, string_to_bool
 
 import logging
 
@@ -199,11 +199,14 @@ def make_index(
     query,
     commit,
     document_encoding_func,
+    dense_embedder_type,
+    dense_embedding_model,
+    sparse_embedding_model,
     python,
     instance_id,
 ):
     """
-    Builds an index for a given set of documents using Pyserini.
+    Builds an index for a given set of documents using retrieval_pipeline_eval.index.
 
     Args:
         repo_dir (str): The path to the repository directory.
@@ -211,67 +214,31 @@ def make_index(
         query (str): The query to use for retrieval.
         commit (str): The commit hash to use for retrieval.
         document_encoding_func (function): The function to use for encoding documents.
-        python (str): The path to the Python executable.
+        dense_embedder_type (str): The type of dense embedder to use.
+        dense_embedding_model (str): The name of the dense embedding model.
+        sparse_embedding_model (str): The name of the sparse embedding model.
         instance_id (int): The ID of the current instance.
 
     Returns:
-        index_path (Path): The path to the built index.
+        index (Index): The built index.
     """
-    index_path = Path(root_dir, f"index__{str(instance_id)}", "index")
-    if index_path.exists():
-        return index_path
-    thread_prefix = f"(pid {os.getpid()}) "
-    documents_path = Path(root_dir, instance_id, "documents.jsonl")
-    if not documents_path.parent.exists():
-        documents_path.parent.mkdir(parents=True)
+    index_path = Path(root_dir, f"index__{str(instance_id)}")
     documents = build_documents(repo_dir, commit, document_encoding_func)
-    with open(documents_path, "w") as docfile:
-        for relative_path, contents in documents.items():
-            print(
-                json.dumps({"id": relative_path, "contents": contents}),
-                file=docfile,
-                flush=True,
-            )
-    cmd = [
-        python,
-        "-m",
-        "pyserini.index",
-        "--collection",
-        "JsonCollection",
-        "--generator",
-        "DefaultLuceneDocumentGenerator",
-        "--threads",
-        "2",
-        "--input",
-        documents_path.parent.as_posix(),
-        "--index",
-        index_path.as_posix(),
-        "--storePositions",
-        "--storeDocvectors",
-        "--storeRaw",
+    
+    dense_embedder = DenseCodeEmbedder(model_type=dense_embedder_type, model_name=dense_embedding_model)
+    sparse_embedder = SparseCodeEmbedder(model_name=sparse_embedding_model)
+    
+    index = Index(sparse_embedding=sparse_embedder, dense_embedder=dense_embedder, qdrant_collection_name=index_path.name, repo_name=repo_dir)
+    docs_to_upload = [
+        {
+            "file_path": key,
+            "function": value
+        }
+        for key, value in documents.items()
     ]
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-        )
-        output, error = proc.communicate()
-    except KeyboardInterrupt:
-        proc.kill()
-        raise KeyboardInterrupt
-    if proc.returncode == 130:
-        logger.warning(thread_prefix + f"Process killed by user")
-        raise KeyboardInterrupt
-    if proc.returncode != 0:
-        logger.error(f"return code: {proc.returncode}")
-        raise Exception(
-            thread_prefix
-            + f"Failed to build index for {instance_id} with error {error}"
-        )
-    return index_path
-
+    index.add_docs(docs_to_upload)
+    
+    return index
 
 def get_remaining_instances(instances, output_file):
     """
@@ -306,13 +273,13 @@ def get_remaining_instances(instances, output_file):
     return remaining_instances
 
 
-def search(instance, index_path):
+def search(instance, index):
     """
     Searches for relevant documents in the given index for the given instance.
 
     Args:
         instance (dict): The instance to search for.
-        index_path (str): The path to the index to search in.
+        index (Index): The index to search in.
 
     Returns:
         dict: A dictionary containing the instance ID and a list of hits, where each hit is a dictionary containing the
@@ -320,25 +287,9 @@ def search(instance, index_path):
     """
     try:
         instance_id = instance["instance_id"]
-        searcher = LuceneSearcher(index_path.as_posix())
-        cutoff = len(instance["problem_statement"])
-        while True:
-            try:
-                hits = searcher.search(
-                    instance["problem_statement"][:cutoff],
-                    k=20,
-                    remove_dups=True,
-                )
-            except Exception as e:
-                if "maxClauseCount" in str(e):
-                    cutoff = int(round(cutoff * 0.8))
-                    continue
-                else:
-                    raise e
-            break
+        hits = index.search(instance["problem_statement"], num_results=20, search_type="dense")
         results = {"instance_id": instance_id, "hits": []}
-        for hit in hits:
-            results["hits"].append({"docid": hit.docid, "score": hit.score})
+        results["hits"] = hits
         return results
     except Exception as e:
         logger.error(f"Failed to process {instance_id}")
@@ -387,6 +338,9 @@ def get_index_paths_worker(
     instance,
     root_dir_name,
     document_encoding_func,
+    dense_embedder_type,
+    dense_embedding_model,
+    sparse_embedding_model,
     python,
     token,
 ):
@@ -403,6 +357,9 @@ def get_index_paths_worker(
             query=query,
             commit=commit,
             document_encoding_func=document_encoding_func,
+            dense_embedder_type = dense_embedder_type,
+            dense_embedding_model = dense_embedding_model,
+            sparse_embedding_model = sparse_embedding_model,
             python=python,
             instance_id=instance_id,
         )
@@ -416,6 +373,9 @@ def get_index_paths(
     remaining_instances: list[dict[str, Any]],
     root_dir_name: str,
     document_encoding_func: Any,
+    dense_embedder_type,
+    dense_embedding_model,
+    sparse_embedding_model,
     python: str,
     token: str,
     output_file: str,
@@ -441,6 +401,9 @@ def get_index_paths(
             instance=instance,
             root_dir_name=root_dir_name,
             document_encoding_func=document_encoding_func,
+            dense_embedder_type = dense_embedder_type,
+            dense_embedding_model = dense_embedding_model,
+            sparse_embedding_model = sparse_embedding_model,
             python=python,
             token=token,
         )
@@ -466,6 +429,10 @@ def main(
     num_shards,
     splits,
     leave_indexes,
+    dense_embedder_type,
+    dense_embedding_model,
+    sparse_embedding_model,
+    use_first_sample_only,
 ):
     document_encoding_func = DOCUMENT_ENCODING_FUNCTIONS[document_encoding_style]
     token = os.environ.get("GITHUB_TOKEN", "git")
@@ -475,14 +442,16 @@ def main(
     else:
         dataset = load_dataset(dataset_name_or_path)
         dataset_name = dataset_name_or_path.replace("/", "__")
+    instances = list()
     if shard_id is not None:
         for split in splits:
             dataset[split] = dataset[split].shard(num_shards, shard_id)
-    instances = list()
     if set(splits) - set(dataset.keys()) != set():
         raise ValueError(f"Unknown splits {set(splits) - set(dataset.keys())}")
     for split in splits:
         instances += list(dataset[split])
+    if use_first_sample_only:
+        instances = instances[:1]
     python = subprocess.run("which python", shell=True, capture_output=True)
     python = python.stdout.decode("utf-8").strip()
     output_file = Path(
@@ -493,10 +462,13 @@ def main(
         dataset_name, output_dir, document_encoding_style
     )
     try:
-        all_index_paths = get_index_paths(
+        all_indexes = get_index_paths(
             remaining_instances,
             root_dir_name,
             document_encoding_func,
+            dense_embedder_type,
+            dense_embedding_model,
+            sparse_embedding_model,
             python,
             token,
             output_file,
@@ -509,8 +481,8 @@ def main(
             del_dirs += index_dirs
         for dirname in del_dirs:
             shutil.rmtree(dirname, ignore_errors=True)
-    logger.info(f"Finished indexing {len(all_index_paths)} instances")
-    search_indexes(remaining_instances, output_file, all_index_paths)
+    logger.info(f"Finished indexing {len(all_indexes)} instances")
+    search_indexes(remaining_instances, output_file, all_indexes)
     missing_ids = get_missing_ids(instances, output_file)
     logger.warning(f"Missing indexes for {len(missing_ids)} instances.")
     logger.info(f"Saved retrieval results to {output_file}")
@@ -537,9 +509,13 @@ if __name__ == "__main__":
         default="file_name_and_contents",
     )
     parser.add_argument("--output_dir", default="./retreival_results")
-    parser.add_argument("--splits", nargs="+", default=["train", "test"])
+    parser.add_argument("--splits", nargs="+", default=["test"])
     parser.add_argument("--shard_id", type=int)
     parser.add_argument("--num_shards", type=int, default=20)
     parser.add_argument("--leave_indexes", type=string_to_bool, default=True)
+    parser.add_argument("--dense_embedder_type", type=str, default="local", choices=["openai", "huggingface", "voyageai", "cohere", "mistral", "tabnine"], help="Type of embedding model to use for evaluation.")
+    parser.add_argument("--dense_embedding_model", type=str, default="jinaai/jina-embeddings-v2-base-code", help="Embedding model to use for evaluation.")
+    parser.add_argument("--sparse_embedding_model", type=str, default = "Qdrant/bm25", help="Sparse embedding model to use for evaluation.")
+    parser.add_argument("--use_first_sample_only", action="store_true", default=True, help="Use only the first sample from the dataset")
     args = parser.parse_args()
     main(**vars(args))

@@ -1,7 +1,7 @@
 import re
 import requests
 
-from swebench.collect.utils import PR_KEYWORDS
+from swe_bench.swebench.collect.utils import PR_KEYWORDS
 from unidiff import PatchSet
 
 

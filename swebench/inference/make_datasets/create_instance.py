@@ -8,8 +8,8 @@ from tempfile import TemporaryDirectory
 import unidiff
 from tqdm.auto import tqdm
 
-from swebench.inference.make_datasets.tokenize_dataset import TOKENIZER_FUNCS
-from swebench.inference.make_datasets.utils import AutoContextManager, ingest_directory_contents
+from swe_bench.swebench.inference.make_datasets.tokenize_dataset import TOKENIZER_FUNCS
+from swe_bench.swebench.inference.make_datasets.utils import AutoContextManager, ingest_directory_contents
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -360,7 +360,7 @@ def add_text_inputs(
         ), "Must specify tokenizer_name if using max_context_len"
         tokenizer, tokenizer_func = TOKENIZER_FUNCS[tokenizer_name]
     input_instances_copy = deepcopy(input_instances)
-    if file_source in {"bm25"}:
+    if file_source in {"bm25", "tabnine_retrieval"}:
         add_retrieval_results(input_instances_copy, retrieval_file, k, file_source)
     orig_dir = os.getcwd()
     with TemporaryDirectory(
@@ -395,6 +395,10 @@ def add_text_inputs(
                         instance["file_contents"] = ingest_directory_contents(
                             cm.repo_path
                         )
+                    elif file_source in {"tabnine_retrieval"}:
+                        instance["file_contents"] = {
+                            x["file"]:x["content"] for x in instance["hits"]
+                        }
                     elif file_source in {"none"}:
                         instance["file_contents"] = dict()
                     else:
@@ -402,7 +406,7 @@ def add_text_inputs(
                     if max_context_len is not None:
                         cur_input_len = base_text_input_length
                         include_files = list()
-                        for filename in [x["docid"] for x in instance["hits"]]:
+                        for filename in [x.get("docid", x.get("file")) for x in instance["hits"]]:
                             content = make_code_text(
                                 {filename: instance["file_contents"][filename]}
                             )

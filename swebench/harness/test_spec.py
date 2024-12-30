@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Union, cast
 
-from swebench.harness.constants import (
+from swe_bench.swebench.harness.constants import (
     SWEbenchInstance,
     KEY_INSTANCE_ID,
     FAIL_TO_PASS,
@@ -18,12 +18,12 @@ from swebench.harness.constants import (
     USE_X86,
     UTF8,
 )
-from swebench.harness.dockerfiles import (
+from swe_bench.swebench.harness.dockerfiles import (
     get_dockerfile_base,
     get_dockerfile_env,
     get_dockerfile_instance,
 )
-from swebench.harness.utils import (
+from swe_bench.swebench.harness.utils import (
     get_requirements,
     get_environment_yml,
     get_test_directives,
